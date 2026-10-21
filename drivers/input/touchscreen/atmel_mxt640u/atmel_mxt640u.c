@@ -115,6 +115,69 @@ inline static void send_uevent(char* string[2])
 	LOGN("uevent[%s], ret:%d\n", string[0], ret);
 }
 
+/*
+ * Tap to wake: while the display is off, the controller runs Sony's AOD
+ * gesture configuration (patch event AOD_ENABLE: T93 double tap on, T100
+ * reporting off, T126 low-power idle) with touch power kept on, and a T93
+ * double tap reports KEY_WAKEUP. Read at every display power down.
+ */
+static bool mxt_tap_to_wake = true;
+module_param_named(tap_to_wake, mxt_tap_to_wake, bool, 0644);
+MODULE_PARM_DESC(tap_to_wake, "Double tap on the dark screen wakes the device");
+
+#define MXT_T2W_DEBOUNCE_MS	500
+#define MXT_T2W_WAKE_MS		1000
+
+static void mxt_t2w_apply_aod(struct mxt_data *data)
+{
+	if (data->stamina_mode.status)
+		mxt_patch_event(data, PATCH_EVENT_CODE_STAMINA_DISABLE);
+	mxt_patch_event(data, PATCH_EVENT_CODE_AOD_ENABLE);
+}
+
+/* Called from the IRQ thread with dev_lock held. */
+static void mxt_t2w_proc_t93(struct mxt_data *data, u8 *message)
+{
+	struct input_dev *dev = data->input_dev_touch;
+	u8 status = message[MXT_T93_TAP_COUNT];
+	u8 fail = message[MXT_T93_FAIL_REASON];
+	unsigned long next;
+
+	if (!(status & MXT_T93_SECOND_TOUCH) || fail != MXT_T93_DOUBLE_TAP_OK)
+		return;
+
+	next = data->t2w_last_wake + msecs_to_jiffies(MXT_T2W_DEBOUNCE_MS);
+	if (time_before(jiffies, next))
+		return;
+	data->t2w_last_wake = jiffies;
+
+	LOGN("tap to wake: double tap\n");
+	pm_wakeup_event(&data->client->dev, MXT_T2W_WAKE_MS);
+	if (dev) {
+		input_report_key(dev, KEY_WAKEUP, 1);
+		input_sync(dev);
+		input_report_key(dev, KEY_WAKEUP, 0);
+		input_sync(dev);
+	}
+	send_uevent(knockon_event);
+}
+
+static ssize_t mxt_tap_to_wake_show(struct mxt_data *data, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n", mxt_tap_to_wake);
+}
+
+static ssize_t mxt_tap_to_wake_store(struct mxt_data *data, const char *buf,
+				     size_t count)
+{
+	bool value;
+
+	if (kstrtobool(buf, &value))
+		return -EINVAL;
+	mxt_tap_to_wake = value;
+	return count;
+}
+
 static int mxt_init_log_level(struct mxt_data *data)
 {
 	if (log_level == NULL && data != NULL) {
@@ -1262,6 +1325,8 @@ static void mxt_proc_t6_messages(struct mxt_data *data, u8 *msg)
 		mxt_set_cover_mode(data);
 		mxt_set_glove_mode(data);
 		data->mxt_drv_data->is_resuming = false;
+		if (data->t2w_armed)
+			mxt_t2w_apply_aod(data);
 	}
 }
 
@@ -2669,6 +2734,9 @@ static int mxt_proc_message(struct mxt_data *data, u8 *message)
 		LOGD("MXT_PROCG_NOISESUPPRESSION_T72 Noise Status:%d\n", message[2] & 0x07);
 	} else if (type == MXT_RETRANSMISSIONCOMPENSATION_T80) {
 		mxt_proc_t80_messages(data, message);
+	} else if (type == MXT_PROCI_TOUCH_SEQUENCE_LOGGER_T93 &&
+		   data->t2w_armed) {
+		mxt_t2w_proc_t93(data, message);
 #if defined(CONFIG_TOUCHSCREEN_LGE_LPWG)
 	} else if (type == MXT_PROCI_TOUCH_SEQUENCE_LOGGER_T93 && data->lpwg_mode) {
 		mxt_proc_t93_messages(data, message);
@@ -6841,6 +6909,8 @@ static LGE_TOUCH_ATTR(debug_enable, S_IWUSR | S_IRUSR, mxt_debug_enable_show, mx
 static LGE_TOUCH_ATTR(t57_debug_enable, S_IWUSR | S_IRUSR, NULL, mxt_t57_debug_enable_store);
 static LGE_TOUCH_ATTR(patch_debug_enable, S_IWUSR | S_IRUSR, mxt_patch_debug_enable_show, mxt_patch_debug_enable_store);
 static LGE_TOUCH_ATTR(knock_on_type, S_IRUGO, mxt_get_knockon_type, NULL);
+static LGE_TOUCH_ATTR(tap_to_wake, 0644, mxt_tap_to_wake_show,
+		      mxt_tap_to_wake_store);
 #if defined(CONFIG_TOUCHSCREEN_LGE_LPWG)
 static LGE_TOUCH_ATTR(lpwg_data, S_IRUGO | S_IWUSR, show_lpwg_data, store_lpwg_data);
 static LGE_TOUCH_ATTR(lpwg_notify, S_IRUGO | S_IWUSR, NULL, store_lpwg_notify);
@@ -6909,6 +6979,7 @@ static struct attribute *lge_touch_attribute_list[] = {
 	&lge_touch_attr_t57_debug_enable.attr,
 	&lge_touch_attr_patch_debug_enable.attr,
 	&lge_touch_attr_knock_on_type.attr,
+	&lge_touch_attr_tap_to_wake.attr,
 #if defined(CONFIG_TOUCHSCREEN_LGE_LPWG)
 	&lge_touch_attr_lpwg_data.attr,
 	&lge_touch_attr_lpwg_notify.attr,
@@ -7766,6 +7837,8 @@ int mxt_initialize_t100_input_device(struct mxt_data *data)
 
 	if (data->t100_aux_vect)
 		input_set_abs_params(input_dev, ABS_MT_ORIENTATION, 0, 255, 0, 0);
+
+	input_set_capability(input_dev, EV_KEY, KEY_WAKEUP);
 
 	if (!data->input_dev) {
 		LOGN("registoring input device\n");
@@ -9332,6 +9405,82 @@ static void mxt_prepare_sod_mode(struct mxt_data *data)
 	mutex_unlock(&data->mxt_drv_data->lpwg_lock);
 }
 
+static bool mxt_t2w_can_arm(struct mxt_data *data)
+{
+	if (!mxt_tap_to_wake || !data->input_dev_touch)
+		return false;
+	if (!data->aod_mode.supported || !data->T93_reportid)
+		return false;
+	if (!data->patch.patch ||
+	    data->patch.event_cnt <= PATCH_EVENT_CODE_AOD_DISABLE)
+		return false;
+	if (data->in_bootloader || data->mfts_enable ||
+	    data->sod_mode.pre_status)
+		return false;
+	/* firmware update, power block, closed cover or display power off */
+	if (mxt_power_block_get(data) || mxt_check_force_sleep(data) ||
+	    mxt_get_pw_status())
+		return false;
+	return true;
+}
+
+/*
+ * Display power down with touch still powered. data->suspended and
+ * pdata->panel_on are left untouched (as in SoD), so the IRQ thread keeps
+ * reading messages.
+ */
+static void mxt_t2w_arm(struct mxt_data *data)
+{
+	cancel_delayed_work_sync(&data->work_delay_cal);
+	touch_disable_irq(data);
+
+	mutex_lock(&data->mxt_drv_data->dev_lock);
+	data->enable_reporting = false;
+	mxt_reset_slots(data);
+	mxt_t2w_apply_aod(data);
+	data->t2w_last_wake = jiffies - msecs_to_jiffies(MXT_T2W_DEBOUNCE_MS);
+	data->t2w_armed = true;
+	mutex_unlock(&data->mxt_drv_data->dev_lock);
+
+	/* must be set before the panel power off that follows */
+	incell_set_touch_wake(true);
+
+	touch_enable_irq(data);
+	touch_enable_irq_wake(data);
+	LOGN("tap to wake armed\n");
+}
+
+static void mxt_t2w_disarm(struct mxt_data *data)
+{
+	touch_disable_irq_wake(data);
+	touch_disable_irq(data);
+
+	mutex_lock(&data->mxt_drv_data->dev_lock);
+	data->t2w_armed = false;
+	if (!mxt_get_pw_status()) {
+		if (data->aod_mode.status) {
+			/* AOD requested by userspace: keep its configuration */
+			mxt_patch_event(data, PATCH_EVENT_CODE_AOD_ENABLE);
+		} else {
+			mxt_patch_event(data, PATCH_EVENT_CODE_AOD_DISABLE);
+			if (data->stamina_mode.status)
+				mxt_set_stamina_mode(data);
+			if (data->glove_mode.status)
+				mxt_set_glove_mode(data);
+			if (data->cover_mode.status)
+				mxt_set_cover_mode(data);
+			mxt_set_side_key(data);
+		}
+	}
+	mxt_reset_slots(data);
+	data->enable_reporting = true;
+	mutex_unlock(&data->mxt_drv_data->dev_lock);
+
+	incell_set_touch_wake(false);
+	touch_enable_irq(data);
+	LOGN("tap to wake disarmed\n");
+}
+
 static int mxt_drm_suspend(struct mxt_data *data)
 {
 	struct input_dev *input_dev = data->input_dev;
@@ -9351,6 +9500,11 @@ static int mxt_drm_suspend(struct mxt_data *data)
 		return ret;
 	} else if (data->pdata->panel_on == POWER_OFF) {
 		LOGN("%s already power off\n", __func__);
+		return ret;
+	}
+
+	if (mxt_t2w_can_arm(data)) {
+		mxt_t2w_arm(data);
 		return ret;
 	}
 
@@ -9433,6 +9587,9 @@ static int mxt_drm_resume(struct mxt_data *data)
 
 	if (data->sod_mode.pre_status)
 		mxt_cancel_sod_mode(data);
+
+	if (data->t2w_armed)
+		mxt_t2w_disarm(data);
 
 	if (data->after_work && data->charge_out) {
 		ret = mxt_pw_lock(INCELL_DISPLAY_POWER_LOCK);

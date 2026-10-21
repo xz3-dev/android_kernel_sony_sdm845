@@ -1148,6 +1148,9 @@ struct mxt_data {
 	struct atmel_aod_mode aod_mode;
 	struct atmel_sod_mode sod_mode;
 
+	bool t2w_armed;
+	unsigned long t2w_last_wake;
+
 	bool after_work;
 	bool charge_out;
 	bool first_unblank;
