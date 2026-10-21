@@ -19,6 +19,7 @@
 #include <linux/hex.h>
 #endif
 
+#include "compat/kernel_compat.h"
 #include "manager/apk_sign.h"
 #include "uapi/app_profile.h"
 #include "klog.h" // IWYU pragma: keep
