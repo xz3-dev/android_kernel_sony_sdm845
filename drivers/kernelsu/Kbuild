@@ -86,6 +86,14 @@ $(info -- KernelSU-Next Git repo detected at: $(GIT_ROOT))
 endif
 endif
 
+# Vendored copy without its own git repository: report what a checkout of
+# KernelSU-Next legacy 465490a2 reports (3025 commits, last tag v3.4.0-legacy).
+ifndef KSU_GIT_VERSION_VALID
+KSU_GIT_VERSION := 3025
+KSU_GIT_TAG := v3.4.0-legacy
+KSU_GIT_VERSION_VALID := 1
+endif
+
 # Calculate version if git version is available
 ifdef KSU_GIT_VERSION_VALID
 $(eval KSU_VERSION=$(shell expr 30000 + $(KSU_GIT_VERSION) + 289))
