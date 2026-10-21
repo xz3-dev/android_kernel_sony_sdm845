@@ -113,5 +113,16 @@ extern int incell_get_display_sod(void);
 static inline int incell_get_display_sod(void) {return 0; }
 #endif /* CONFIG_DRM_SDE_SPECIFIC_PANEL */
 
+/*
+ * Keep touch (and panel I/O) power on while the display is off so the touch
+ * controller can detect a wake gesture. Set by the touch driver before the
+ * display powers down, cleared on unblank.
+ */
+#ifdef CONFIG_DRM_SDE_SPECIFIC_PANEL
+void incell_set_touch_wake(bool keep_power);
+#else
+static inline void incell_set_touch_wake(bool keep_power) { }
+#endif /* CONFIG_DRM_SDE_SPECIFIC_PANEL */
+
 #endif /* __INCELL_H__ */
 

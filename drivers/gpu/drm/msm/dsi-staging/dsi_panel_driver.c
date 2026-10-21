@@ -49,6 +49,31 @@ static int s_chargemon_exit = NOT_CHARGEMON_EXIT;
 
 static int display_sod_mode = 0;
 
+/*
+ * Set by the touch driver while a wake gesture is armed: keep the touch
+ * controller powered while the display is off, using the pre_sod_mode power
+ * sequence (panel held in reset, panel vddio and touch power kept on).
+ */
+static bool touch_wake_keep_power;
+
+void incell_set_touch_wake(bool keep_power)
+{
+	if (READ_ONCE(touch_wake_keep_power) == keep_power)
+		return;
+
+	WRITE_ONCE(touch_wake_keep_power, keep_power);
+	pr_info("%s: %d\n", __func__, keep_power);
+}
+EXPORT_SYMBOL(incell_set_touch_wake);
+
+static bool dsi_panel_driver_keep_power(struct panel_specific_pdata *spec_pdata)
+{
+	if (spec_pdata->pre_sod_mode)
+		return true;
+
+	return READ_ONCE(touch_wake_keep_power);
+}
+
 static int __init lcdid_adc_setup(char *str)
 {
 	unsigned long res;
@@ -637,9 +662,10 @@ int dsi_panel_driver_power_off(struct dsi_panel *panel)
 		return -EINVAL;
 	}
 	spec_pdata = panel->spec_pdata;
-	if (spec_pdata->pre_sod_mode && spec_pdata->sod_mode == SOD_POWER_OFF) {
+	if (dsi_panel_driver_keep_power(spec_pdata) &&
+	    spec_pdata->sod_mode == SOD_POWER_OFF) {
 		pr_info("%s: power off", __func__);
-	} else if (spec_pdata->pre_sod_mode) {
+	} else if (dsi_panel_driver_keep_power(spec_pdata)) {
 		rc = dsi_panel_driver_reset_panel(panel, 0);
 		if (rc)
 			pr_warn("%s: Panel reset failed. rc=%d\n",
@@ -687,9 +713,10 @@ int dsi_panel_driver_post_power_off(struct dsi_panel *panel)
 	spec_pdata = panel->spec_pdata;
 	if (spec_pdata->aod_mode == 1)
 		spec_pdata->aod_mode = 0;
-	if (spec_pdata->pre_sod_mode && spec_pdata->sod_mode == SOD_POWER_OFF) {
+	if (dsi_panel_driver_keep_power(spec_pdata) &&
+	    spec_pdata->sod_mode == SOD_POWER_OFF) {
 		pr_info("%s: power off\n", __func__);
-	} else if (spec_pdata->pre_sod_mode) {
+	} else if (dsi_panel_driver_keep_power(spec_pdata)) {
 		pr_info("%s: power off skip\n", __func__);
 		return rc;
 	}
@@ -766,7 +793,8 @@ int dsi_panel_driver_pre_power_on(struct dsi_panel *panel)
 	}
 
 	spec_pdata = panel->spec_pdata;
-	if (spec_pdata->pre_sod_mode && (incell->state & POWER_ON_MASK)) {
+	if (dsi_panel_driver_keep_power(spec_pdata) &&
+	    (incell->state & POWER_ON_MASK)) {
 		pr_notice("%s: Panel reset\n", __func__);
 		rc = dsi_panel_reset(panel);
 		if (rc) {
