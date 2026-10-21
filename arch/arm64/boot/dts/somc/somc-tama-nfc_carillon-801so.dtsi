@@ -1,0 +1,47 @@
+/* arch/arm64/boot/dts/somc/somc-tama-nfc_carillon-801so.dtsi
+ *
+ * Xperia XZ3 SoftBank 801SO (akatsuki SBM) NFC on the akatsuki "generic" device tree.
+ * The 801SO has a Sony CXD224x FeliCa/NFC controller (i2c 0x29) powered through a Rohm BD7602 LDO (0x1e)
+ * instead of the NXP PN553 (0x28) of the global models. Describe it exactly like Sony's 801SO tree does
+ * (sdm845-tama-akatsuki_sbm.dtsi includes somc-tama-nfc_carillon.dtsi) and take the FELICA_INT_N / GPIO_12
+ * pin configuration from sdm845-tama-akatsuki_jp-common.dtsi.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ */
+
+#include "somc-tama-nfc_carillon.dtsi"
+
+/* GPIO_63: FELICA_INT_N (active low; pull-up as in the 801SO DT, the global DT pulls it down) */
+&sdm_gpio_63 {
+	mux {
+		pins = "gpio63";
+		function = "gpio";
+	};
+
+	config {
+		pins = "gpio63";
+		drive-strength = <2>;
+		/delete-property/ bias-pull-down;
+		bias-pull-up;
+		input-enable;
+	};
+};
+
+/* GPIO_12: not connected on the 801SO (PN553 VEN on the global models) */
+&sdm_gpio_12 {
+	mux {
+		pins = "gpio12";
+		function = "gpio";
+	};
+
+	config {
+		pins = "gpio12";
+		drive-strength = <2>;
+		/delete-property/ bias-disable;
+		bias-pull-down;
+		/delete-property/ output-low;
+		input-enable;
+	};
+};

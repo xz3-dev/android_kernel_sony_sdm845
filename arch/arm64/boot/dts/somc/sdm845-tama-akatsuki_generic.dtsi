@@ -15,4 +15,5 @@
 &soc {
 };
 
-#include "somc-tama-nfc_pn553.dtsi"
+/* SoftBank 801SO: Sony CXD224x + Rohm BD7602 instead of the global NXP PN553 */
+#include "somc-tama-nfc_carillon-801so.dtsi"
