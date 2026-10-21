@@ -1,0 +1,98 @@
+name: build
+
+on:
+  push:
+    branches: [lineage-22.2-xz3]
+  pull_request:
+    branches: [lineage-22.2-xz3]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # AOSP prebuilts/clang/host/linux-x86, android15-qpr2-release
+  CLANG_COMMIT: 96266255abde668f1bf100bf2c47363b96b7a21e
+  CLANG_VERSION: clang-r536225
+  # AOSP system/libufdt utils/src/mkdtboimg.py, android-15.0.0_r1
+  MKDTBOIMG_REF: android-15.0.0_r1
+  MKDTBOIMG_SHA256: 04011264802cc566cb994b71344fd20e6f58363293e4ce80757b8176a165d7be
+
+jobs:
+  akatsuki:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          path: kernel
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            bc bison flex cpio device-tree-compiler libssl-dev python3 \
+            binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi
+
+      - name: Cache clang
+        id: clang-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/clang
+          key: ${{ env.CLANG_VERSION }}-${{ env.CLANG_COMMIT }}
+
+      - name: Fetch clang
+        if: steps.clang-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/clang
+          curl -fsSL --retry 3 \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/$CLANG_COMMIT/$CLANG_VERSION.tar.gz" \
+            | tar -xz -C ~/clang
+
+      - name: Check clang
+        run: |
+          ~/clang/bin/clang --version
+          grep -q "based on ${CLANG_VERSION#clang-}" ~/clang/AndroidVersion.txt
+
+      - name: Fetch mkdtboimg
+        run: |
+          curl -fsSL --retry 3 \
+            "https://android.googlesource.com/platform/system/libufdt/+/refs/tags/$MKDTBOIMG_REF/utils/src/mkdtboimg.py?format=TEXT" \
+            | base64 -d > mkdtboimg.py
+          echo "$MKDTBOIMG_SHA256  mkdtboimg.py" | sha256sum -c -
+
+      - name: Build
+        run: MKDTBOIMG=$PWD/mkdtboimg.py kernel/.github/scripts/build.sh ~/clang out dist
+
+      - name: Check symbol CRC tables
+        run: python3 kernel/.github/scripts/check_kcrctab.py dist/vmlinux dist/Module.symvers ~/clang/bin/llvm-readelf
+
+      - name: Check 801SO NFC device tree
+        run: python3 kernel/.github/scripts/check_dt.py dist/Image.gz-dtb dist/dtbo.img
+
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum Image.gz-dtb dtbo.img kernel.config vmlinux System.map Module.symvers | tee SHA256SUMS
+          cat version.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: akatsuki-kernel
+          path: |
+            dist/Image.gz-dtb
+            dist/dtbo.img
+            dist/kernel.config
+            dist/kernel.release
+            dist/version.txt
+            dist/System.map
+            dist/Module.symvers
+            dist/SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: akatsuki-vmlinux
+          path: dist/vmlinux
