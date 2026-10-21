@@ -14,6 +14,7 @@
 #include <linux/security.h>
 #include <linux/syscalls.h>
 #include <linux/pagemap.h>
+#include <linux/ksu_hook.h>
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -294,6 +295,7 @@ SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
 	struct kstat stat;
 	int error;
 
+	ksu_handle_stat(&dfd, &filename, &flag);
 	error = vfs_fstatat(dfd, filename, &stat, flag);
 	if (error)
 		return error;
@@ -306,8 +308,11 @@ SYSCALL_DEFINE2(newfstat, unsigned int, fd, struct stat __user *, statbuf)
 	struct kstat stat;
 	int error = vfs_fstat(fd, &stat);
 
-	if (!error)
+	if (!error) {
 		error = cp_new_stat(&stat, statbuf);
+		if (!error)
+			ksu_handle_newfstat_ret(&fd, &statbuf);
+	}
 
 	return error;
 }
@@ -424,8 +429,11 @@ SYSCALL_DEFINE2(fstat64, unsigned long, fd, struct stat64 __user *, statbuf)
 	struct kstat stat;
 	int error = vfs_fstat(fd, &stat);
 
-	if (!error)
+	if (!error) {
 		error = cp_new_stat64(&stat, statbuf);
+		if (!error)
+			ksu_handle_fstat64_ret(&fd, &statbuf);
+	}
 
 	return error;
 }
@@ -436,6 +444,7 @@ SYSCALL_DEFINE4(fstatat64, int, dfd, const char __user *, filename,
 	struct kstat stat;
 	int error;
 
+	ksu_handle_stat(&dfd, &filename, &flag);
 	error = vfs_fstatat(dfd, filename, &stat, flag);
 	if (error)
 		return error;
