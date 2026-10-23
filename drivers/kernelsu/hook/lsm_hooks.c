@@ -6,6 +6,9 @@
 #include <linux/atomic.h>
 
 #include "klog.h" // IWYU pragma: keep
+#include "ksu.h"
+#include <linux/key.h>
+#include <linux/rcupdate.h>
 #include "runtime/ksud_boot.h"
 #include "compat/kernel_compat.h"
 #include "setuid_hook.h"
@@ -16,6 +19,21 @@
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0) ||                           \
 	defined(CONFIG_IS_HW_HISI) || defined(CONFIG_KSU_ALLOWLIST_WORKAROUND)
 struct key *init_session_keyring = NULL;
+
+/*
+ * The file-based encryption keys are looked up in the caller's session keyring
+ * on these kernels. ksu_cred is prepared from a kernel thread, which has none,
+ * so files under /data opened with it fail with -ENOKEY. Whichever of
+ * setup_ksu_cred() and the keyring capture below happens last attaches it.
+ */
+void ksu_cred_attach_init_keyring(void)
+{
+	if (!IS_ENABLED(CONFIG_KEYS) || !ksu_cred || !init_session_keyring ||
+	    rcu_access_pointer(ksu_cred->session_keyring))
+		return;
+	rcu_assign_pointer(ksu_cred->session_keyring, key_get(init_session_keyring));
+	pr_info("ksu cred: using init session keyring\n");
+}
 
 static int ksu_key_permission(key_ref_t key_ref, const struct cred *cred,
 			      unsigned perm)
@@ -29,6 +47,7 @@ static int ksu_key_permission(key_ref_t key_ref, const struct cred *cred,
 	}
 	init_session_keyring = cred->session_keyring;
 	pr_info("kernel_compat: got init_session_keyring\n");
+	ksu_cred_attach_init_keyring();
 	return 0;
 }
 #endif

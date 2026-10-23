@@ -38,6 +38,7 @@ extern ssize_t ksu_kernel_write_compat(struct file *p, const void *buf,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0) ||                           \
 	defined(CONFIG_IS_HW_HISI) || defined(CONFIG_KSU_ALLOWLIST_WORKAROUND)
 extern struct key *init_session_keyring;
+void ksu_cred_attach_init_keyring(void);
 #endif
 
 extern long ksu_copy_from_user_nofault(void *dst, const void __user *src, size_t size);

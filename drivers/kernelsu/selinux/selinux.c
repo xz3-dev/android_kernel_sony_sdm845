@@ -4,8 +4,6 @@
 #include "linux/security.h"
 #include "objsec.h"
 #include "linux/version.h"
-#include "linux/key.h"
-#include "linux/rcupdate.h"
 #include "compat/kernel_compat.h"
 #include "klog.h" // IWYU pragma: keep
 #include "ksu.h"
@@ -93,19 +91,10 @@ void setup_ksu_cred(void)
     if (ksu_cred && transive_to_domain(KERNEL_SU_CONTEXT, ksu_cred, false)) {
         pr_err("setup ksu cred failed.\n");
     }
-#if defined(CONFIG_KEYS) && !defined(KSU_KPROBES_HOOK) &&                      \
+#if !defined(KSU_KPROBES_HOOK) &&                                              \
 	(LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0) ||                      \
 	 defined(CONFIG_IS_HW_HISI) || defined(CONFIG_KSU_ALLOWLIST_WORKAROUND))
-    /*
-     * On these kernels the file-based encryption keys are looked up in the
-     * caller's session keyring. ksu_cred is prepared from the kernel init task,
-     * which has none, so files under /data opened with it fail with -ENOKEY.
-     */
-    if (ksu_cred && init_session_keyring &&
-        !rcu_access_pointer(ksu_cred->session_keyring)) {
-        rcu_assign_pointer(ksu_cred->session_keyring, key_get(init_session_keyring));
-        pr_info("ksu cred: using init session keyring\n");
-    }
+    ksu_cred_attach_init_keyring();
 #endif
 }
 
